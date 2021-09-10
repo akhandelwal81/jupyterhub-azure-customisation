@@ -12,5 +12,4 @@ A working Kubernetes deployment is called a cluster. You can visualize a Kuberne
 
 This diagram shows how the parts of a Kubernetes cluster relate to one another:
 ![alt text for screen readers](/images/kube.png)
-<img src="/images/kube.png" style="height: 100px; width:100px;"/>
 
