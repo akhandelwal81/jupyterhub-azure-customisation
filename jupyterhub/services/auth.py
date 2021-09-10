@@ -408,3 +408,136 @@ class HubAuth(SingletonConfigurable):
             data = r.json()
 
         return data
+def user_for_cookie(self, encrypted_cookie, use_cache=True, session_id=''):
+        """Deprecated and removed. Use HubOAuth to authenticate browsers."""
+        raise RuntimeError(
+            "Identifying users by shared cookie is removed in JupyterHub 2.0. Use OAuth tokens."
+        )
+
+    def user_for_token(self, token, use_cache=True, session_id=''):
+        """Ask the Hub to identify the user for a given token.
+        Args:
+            token (str): the token
+            use_cache (bool): Specify use_cache=False to skip cached cookie values (default: True)
+        Returns:
+            user_model (dict): The user model, if a user is identified, None if authentication fails.
+            The 'name' field contains the user's name.
+        """
+        return self._check_hub_authorization(
+            url=url_path_join(
+                self.api_url,
+                "user",
+            ),
+            api_token=token,
+            cache_key='token:{}:{}'.format(
+                session_id,
+                hashlib.sha256(token.encode("utf8", "replace")).hexdigest(),
+            ),
+            use_cache=use_cache,
+        )
+
+    auth_header_name = 'Authorization'
+    auth_header_pat = re.compile(r'(?:token|bearer)\s+(.+)', re.IGNORECASE)
+
+    def get_token(self, handler):
+        """Get the user token from a request
+        - in URL parameters: ?token=<token>
+        - in header: Authorization: token <token>
+        """
+
+        user_token = handler.get_argument('token', '')
+        if not user_token:
+            # get it from Authorization header
+            m = self.auth_header_pat.match(
+                handler.request.headers.get(self.auth_header_name, '')
+            )
+            if m:
+                user_token = m.group(1)
+        return user_token
+
+    def _get_user_cookie(self, handler):
+        """Get the user model from a cookie"""
+        # overridden in HubOAuth to store the access token after oauth
+        return None
+
+    def get_session_id(self, handler):
+        """Get the jupyterhub session id
+        from the jupyterhub-session-id cookie.
+        """
+        return handler.get_cookie('jupyterhub-session-id', '')
+
+    def get_user(self, handler):
+        """Get the Hub user for a given tornado handler.
+        Checks cookie with the Hub to identify the current user.
+        Args:
+            handler (tornado.web.RequestHandler): the current request handler
+        Returns:
+            user_model (dict): The user model, if a user is identified, None if authentication fails.
+            The 'name' field contains the user's name.
+        """
+
+        # only allow this to be called once per handler
+        # avoids issues if an error is raised,
+        # since this may be called again when trying to render the error page
+        if hasattr(handler, '_cached_hub_user'):
+            return handler._cached_hub_user
+
+        handler._cached_hub_user = user_model = None
+        session_id = self.get_session_id(handler)
+
+        # check token first
+        token = self.get_token(handler)
+        if token:
+            user_model = self.user_for_token(token, session_id=session_id)
+            if user_model:
+                handler._token_authenticated = True
+
+        # no token, check cookie
+        if user_model is None:
+            user_model = self._get_user_cookie(handler)
+
+        # cache result
+        handler._cached_hub_user = user_model
+        if not user_model:
+            app_log.debug("No user identified")
+        return user_model
+
+    def check_scopes(self, required_scopes, user):
+        """Check whether the user has required scope(s)"""
+        return check_scopes(required_scopes, set(user["scopes"]))
+
+
+class HubOAuth(HubAuth):
+    """HubAuth using OAuth for login instead of cookies set by the Hub.
+    Use this class if you want users to be able to visit your service with a browser.
+    They will be authenticated via OAuth with the Hub.
+    .. versionadded: 0.8
+    """
+
+    # Overrides of HubAuth API
+
+    @default('login_url')
+    def _login_url(self):
+        return url_concat(
+            self.oauth_authorization_url,
+            {
+                'client_id': self.oauth_client_id,
+                'redirect_uri': self.oauth_redirect_uri,
+                'response_type': 'code',
+            },
+        )
+
+    @property
+    def cookie_name(self):
+        """Use OAuth client_id for cookie name
+        because we don't want to use the same cookie name
+        across OAuth clients.
+        """
+        return self.oauth_client_id
+
+    @property
+    def state_cookie_name(self):
+        """The cookie name for storing OAuth state
+        This cookie is only live for the duration of the OAuth handshake.
+        """
+        return self.cookie_name + '-oauth-state'
