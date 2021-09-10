@@ -11,3 +11,6 @@ while worker nodes do the actual computing work.
 A working Kubernetes deployment is called a cluster. You can visualize a Kubernetes cluster as two parts: the control plane and the compute machines, or nodes. Each node is its own Linux® environment, and could be either a physical or virtual machine. Each node runs pods, which are made up of containers.
 
 This diagram shows how the parts of a Kubernetes cluster relate to one another:
+![alt text for screen readers](/images/kube.png)
+<img src="/images/kube.png" style="height: 100px; width:100px;"/>
+
