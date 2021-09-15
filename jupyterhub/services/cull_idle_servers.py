@@ -36,16 +36,52 @@ from functools import partial
 import json
 import os
 from dateutil.parser import parse as parse_date
-from tornado.gen import coroutine
+from tornado.gen import coroutine, multi
+from tornado.locks import Semaphore
 from tornado.log import app_log
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.options import define, options, parse_command_line
 
+try:
+    from urllib.parse import quote
+except ImportError:
+    from urllib import quote
+
+def parse_date(date_string):
+    """Parse a timestamp
+
+    If it doesn't have a timezone, assume utc
+    Returned datetime object will always be a timezone-aware
+    """
+    dt =dateutil.parser.parse(date_string)
+    if not dt.tzinfo:
+        #assume naive timestamps are UTC
+        dt =dt.replace(tzinfo=timezone.utc)
+    return dt
+
+def format_td(td):
+    """Nicely format a timedelta objects
+
+    as HH:MM:SS
+    """
+    if td is None:
+        return "unknown"
+    if isinstance(td,str):
+        return td
+    seconds = int(td.total_seconds())
+    h = seconds //3600
+    seconds = seconds % 3600
+    m = seconds //60
+    seconds = seconds % 60
+    return "{h:02}:{m:02}:{seconds:02}".format(h=h,m=m,seconds=seconds)
+
 
 @coroutine
-def cull_idle(url, api_token, timeout):
-    """cull idle single-user servers"""
+def cull_idle(url, api_token, inactive_limit, cull_users=False, max_age=0,concurrency=10):
+    """cull idle single-user
+    If cul_users,inactive *users* will be deleted as well.
+    """
     auth_header = {
             'Authorization': 'token %s' % api_token
         }
@@ -55,9 +91,27 @@ def cull_idle(url, api_token, timeout):
     now = datetime.datetime.utcnow()
     cull_limit = now - datetime.timedelta(seconds=timeout)
     client = AsyncHTTPClient()
+
+    If concurrency:
+        semaphore = Semaphore(concurrency)
+
+        @coroutine
+        def fetch(req):
+            """
+            client.fetch wrapped in a semaphore to limit concurrency
+            """
+            yield semaphore.acquire()
+            try:
+                return (yield.client.fetch(req))
+            finally:
+                yield semaphore.release()
+    else:
+        fetc = client.fetch
+
     resp = yield client.fetch(req)
     users = json.loads(resp.body.decode('utf8', 'replace'))
     futures = []
+
     for user in users:
         last_activity = parse_date(user['last_activity'])
         if user['server'] and last_activity < cull_limit:
