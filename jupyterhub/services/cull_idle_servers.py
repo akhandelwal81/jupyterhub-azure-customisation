@@ -112,6 +112,66 @@ def cull_idle(url, api_token, inactive_limit, cull_users=False, max_age=0,concur
     users = json.loads(resp.body.decode('utf8', 'replace'))
     futures = []
 
+    @ccotoutine
+    def handle_server(user,server_name,server,max_age,inactive_limit):
+        """
+        Handle culling a single servers
+
+        "server" is the entire server model from the API.
+
+        Returns True if server is now stopped (user removable),
+        False otherwise.
+        """
+
+        log_name = user['name']
+        if server_name:
+            log_name = '%s/%s' % (user['name'],server_name)
+        if server.get('pending'):
+            app_log.warning( "Not culling server %s with lending %s", log_name, server['pending'])
+            return False
+
+        # jupyterhub version < 0.9 defined 'server.url' once the server was already
+        # as an implicit signal that the server was ready .
+        # By current (0.9) definitions, servers that have no pending events
+        # and are not ready shouldn't be in the model but let's check just to be safe
+
+        if not server.get('ready',bool(server['url'])):
+            app_log.warning("Not culling not ready not pending server %s: %s", log_name,server)
+            return False
+
+        if server.get('started'):
+            age = now - parse_date(server['started'])
+        else:
+            # started may be undefined on jupyterhub < 0.9
+            age = None
+
+        # check last activity
+        # last_activity can be None in 0.9
+        if server['last_activity']:
+            inactive = now - parse_date(server['last_activity'])
+        else:
+            #no acitivity yet, use start datetime
+            # last_activity may be None with Jupyterhub 0.9
+            # which introduces the 'started' field which is never None
+            # forrunning servers
+            inactive =max_age
+
+
+        #######################################################################
+        ## Customisation of Culling process
+        #Add in additional server tests here. Return False to mean "don't cull",
+        # True means "cull immediately", or, for example, update some other variables like
+        # inactive_limit .
+
+        # Here, server['state' is the result of the get_state method on the spawner.
+        #This does *not* contain the below by default, you may have to modify your spawner to make this works
+        #The user model is the user model from the API
+        #
+        #If server['state']['profile_name'] = = 'unlimited'
+        # return False
+        # inactive_limit = server['state']['culltime']
+
+
     for user in users:
         last_activity = parse_date(user['last_activity'])
         if user['server'] and last_activity < cull_limit:
