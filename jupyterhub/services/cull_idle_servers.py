@@ -171,6 +171,54 @@ def cull_idle(url, api_token, inactive_limit, cull_users=False, max_age=0,concur
         # return False
         # inactive_limit = server['state']['culltime']
 
+        should_cull = (
+        inactive is not None and inactive.total_seconds() >= inactive_limit
+        )
+
+        if should_cull:
+            app_log.info(
+            "Culling server %s (inactive for %s)", log_name, format_td(inactive)
+            )
+
+        if max_age and not should_cull:
+            # only check started if max_age is unspecified# so that we can still be compatible with Jupyterhub 0.9
+            # which doesn't define the started' field
+            if age is not None and age.total_seconds() >- max_age:
+                pp_log.info(
+                "Culling server  %s (age: %s, inactive for %s)",
+                log_name,
+                format_td(age),
+                format_td(inactive)
+                )
+                should_cull = True
+        if not should_cull:
+            app_log.debug(
+            "Not culling server %s (age; %s, inactive for %s)",
+            log_name,
+            format_td(age)
+            format_td(inactive)
+            )
+            return False
+
+        if server_name:
+            # culling a named servers
+            delete_url = url + "/users/%s/servers/%s" % (
+                quote(user['name']),
+                quote(server['name']),
+            )
+        else:
+            delete_url = url + '/users/%s/server' % quote(user['name'])
+
+        req = HTTPRequest(url=delete_url, method='DELETE', headers =auth_header)
+        resp = yield fetch(req)
+        if resp.code ==202:
+            app_log.warning("Server  %s is slow to stop", log_name)
+            # return False to prevent culling user with pending shutdowns
+            return False
+        return True
+
+        
+
 
     for user in users:
         last_activity = parse_date(user['last_activity'])
