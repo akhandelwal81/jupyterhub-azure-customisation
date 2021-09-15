@@ -298,27 +298,76 @@ def cull_idle(url, api_token, inactive_limit, cull_users=False, max_age=0,concur
                 format_td(inactive),
 
                 )
-                should_cull = True 
-    for user in users:
-        last_activity = parse_date(user['last_activity'])
-        if user['server'] and last_activity < cull_limit:
-            app_log.info("Culling %s (inactive since %s)", user['name'], last_activity)
-            req = HTTPRequest(url=url + '/users/%s/server' % user['name'],
-                method='DELETE',
-                headers=auth_header,
-            )
-            futures.append((user['name'], client.fetch(req)))
-        elif user['server'] and last_activity > cull_limit:
-            app_log.debug("Not culling %s (active since %s)", user['name'], last_activity)
+                should_cull = True
 
-    for (name, f) in futures:
-        yield f
-        app_log.debug("Finished culling %s", name)
+        if not should_cull:
+            app_log.debug(
+            "Not culling user %s (created: %s, last active: %s)",
+            user['name'],
+            format_td(age),
+            format_td(inactive),
+
+            )
+            return False
+
+        req = HTTPRequest(
+        url=url + '/users/%s' %user['name'], method='DELETE', headers=auth_header
+
+        )
+        yield fetch(req)
+        return True
+
+    for user in users:
+        futures.append((user['name'],handle_user(user)))#
+
+    for (name,f) in futures:
+        try:
+            result = yield f
+        except Exception:
+            app_log.exception("Error processing %s", name)
+        else:
+            if result:
+                app_log.debug("Finished culling %s", name)
+
+
 
 if __name__ == '__main__':
-    define('url', default=os.environ.get('JUPYTERHUB_API_URL') or 'http://127.0.0.1:8081/hub/api', help="The JupyterHub API URL")
-    define('timeout', default=600, help="The idle timeout (in seconds)")
-    define('cull_every', default=0, help="The interval (in seconds) for checking for idle servers to cull")
+    define('url',
+            default=os.environ.get('JUPYTERHUB_API_URL') or 'http://127.0.0.1:8081/hub/api',
+            help="The JupyterHub API URL",
+            )
+
+    define('timeout', default=600, help="The idle timeout (in seconds)",
+    )
+    define('cull_every',
+             default=0, help="The interval (in seconds) for checking for idle servers to cull",
+             )
+
+    define(
+    'max_age',
+    default=0,
+    help="The maximum age (in seconds) of servers that should b culled even if they are active",
+
+    )
+
+    define(
+    'cull_users',
+    default=False,
+    help="""Cull users in addition to servers.
+            This is for use in temporary users use cases such as tmpnb.""",
+
+    )
+
+    define(
+    'concurrency',
+    default=10,
+    help =""" Limit the number of concurrent requests made to the Hub.
+
+        Deleting a lot of users at the same time can slow down the Hub.
+        so limit the number of API requests we have outstanding at any given time.
+        """
+    )
+
 
     parse_command_line()
     if not options.cull_every:
@@ -326,9 +375,30 @@ if __name__ == '__main__':
 
     api_token = os.environ['JUPYTERHUB_API_TOKEN']
 
+    try:
+        AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
+    except ImportError as e:
+        app_log.warning(
+        "Could not load pycurl: %s\n"
+        "pycurl is recommended if you have a large number of users.",
+        e,
+
+        )
+
     loop = IOLoop.current()
-    cull = lambda : cull_idle(options.url, api_token, options.timeout)
-    # run once before scheduling periodic call
+    cull = partial(
+    cull_idle,
+    url = options.url,
+    api_token=api_token,
+    inactive_limit=options.timeout,
+    cull_users=options.cull_users,
+    max_age=options.max_age,
+    concurrency=options.concurrency,
+
+    )
+
+
+    #run once before scheduling periodic call
     loop.run_sync(cull)
     # schedule periodic cull
     pc = PeriodicCallback(cull, 1e3 * options.cull_every)
