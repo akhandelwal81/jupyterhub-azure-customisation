@@ -397,9 +397,10 @@ if __name__ == '__main__':
 
     )
 
+    #schedule first cull immediately
+    # because PeriodicCallback doesn't start until the end of the first last_activity_interval
+    loop.add_callback(cull)
 
-    #run once before scheduling periodic call
-    loop.run_sync(cull)
     # schedule periodic cull
     pc = PeriodicCallback(cull, 1e3 * options.cull_every)
     pc.start()
